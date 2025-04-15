@@ -3,11 +3,10 @@ import { JWT } from "google-auth-library";
 import { env } from "./env";
 import { exec, execSync } from "child_process";
 import { unlink } from "fs/promises";
-import { statSync } from "fs";
+import { statSync, createReadStream } from "fs";
 import * as path from "path";
 import * as os from "os";
 import { filesize } from "filesize";
-import { createReadStream } from "fs";
 import dayjs from "dayjs";
 
 const auth = new JWT({
@@ -25,6 +24,7 @@ const deleteStaleBackups = async (cutOffDate: Date) => {
   const folderAccess = await gdrive.files.get({
     fileId: env.FOLDER_ID,
     fields: "id",
+    supportsAllDrives: true,
   });
 
   if (!folderAccess.data.id) {
@@ -36,6 +36,8 @@ const deleteStaleBackups = async (cutOffDate: Date) => {
     pageSize: 100,
     fields: "nextPageToken, files(id, createdTime)",
     q: `'${env.FOLDER_ID}' in parents and trashed=false and mimeType = 'application/gzip' and createdTime < '${cutOffDate.toISOString()}'`,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
 
   if (!res.data.files) {
@@ -44,7 +46,10 @@ const deleteStaleBackups = async (cutOffDate: Date) => {
 
   for (const file of res.data.files) {
     if (!file.id) continue;
-    await gdrive.files.delete({ fileId: file.id });
+    await gdrive.files.delete({
+      fileId: file.id,
+      supportsAllDrives: true,
+    });
   }
 };
 
@@ -81,7 +86,7 @@ const dumpToFile = async (path: string) => {
         }
 
         resolve(stdout);
-      },
+      }
     );
   });
 };
@@ -90,6 +95,7 @@ const pushToDrive = async (filename: string, path: string) => {
   const folderAccess = await gdrive.files.get({
     fileId: env.FOLDER_ID,
     fields: "id",
+    supportsAllDrives: true,
   });
 
   if (!folderAccess.data.id) {
@@ -110,6 +116,7 @@ const pushToDrive = async (filename: string, path: string) => {
   await gdrive.files.create({
     requestBody: fileMetadata,
     media: media,
+    supportsAllDrives: true,
   });
 };
 
@@ -119,7 +126,7 @@ export async function run() {
       console.log(`Deleting old backups older than a ${env.RETENTION}`);
       const cutOffDate = dayjs().subtract(1, env.RETENTION).toDate();
       await deleteStaleBackups(cutOffDate);
-      console.log(`Delete complete! Procceding with backup.`);
+      console.log(`Delete complete! Proceeding with backup.`);
     }
 
     const timestamp = new Date()
@@ -128,19 +135,15 @@ export async function run() {
       .replace(".", "-");
 
     const filename = `${env.FILE_PREFIX}${timestamp}.tar.gz`;
-
     const filepath = path.join(os.tmpdir(), filename);
 
     console.log(`Starting backup of ${filename}`);
-
     await dumpToFile(filepath);
 
     console.log("Backup done! Uploading to Google Drive...");
-
     await pushToDrive(filename, filepath);
 
     console.log("Backup uploaded to Google Drive!");
-
     await unlink(filepath);
 
     console.log("All done!");
